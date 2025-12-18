@@ -1,286 +1,202 @@
-"""
-AlarMed - Backup & Restore Screen
-Clean responsive design
-"""
-
 from kivymd.uix.screen import MDScreen
-from kivymd.uix.card import MDCard
-from kivymd.uix.label import MDLabel
 from kivymd.uix.button import MDRaisedButton, MDFlatButton
 from kivymd.uix.boxlayout import MDBoxLayout
+from kivymd.uix.label import MDLabel
+from kivymd.uix.card import MDCard
 from kivymd.uix.scrollview import MDScrollView
-from kivymd.uix.toolbar import MDTopAppBar
-from kivymd.uix.dialog import MDDialog
-from kivy.metrics import dp
-from kivy.app import App
-from datetime import datetime
-import shutil
-from pathlib import Path
-import sqlite3
 
-try:
-    from android.permissions import request_permissions, Permission
-    from android.storage import primary_external_storage_path
-    ANDROID = True
-except ImportError:
-    ANDROID = False
+from kivy.app import App
+from kivy.metrics import dp
+from kivy.uix.filechooser import FileChooserListView
+from kivy.uix.popup import Popup
+
+from datetime import datetime
+import os
+
 
 class BackupScreen(MDScreen):
     def __init__(self, **kwargs):
         super().__init__(**kwargs)
+        self._popup = None
+        self.status_label = None
         self.build_ui()
-    
+
     def build_ui(self):
+        self.clear_widgets()
         app = App.get_running_app()
-        
-        main_layout = MDBoxLayout(orientation='vertical')
-        
-        toolbar = MDTopAppBar(
-            title="Backup & Restore",
-            left_action_items=[["arrow-left", lambda x: app.go_to_screen('dashboard')]],
+
+        root = MDBoxLayout(orientation="vertical")
+
+        # Header card (matches your app style, but no icon buttons)
+        header = MDCard(
+            orientation="vertical",
+            padding=dp(18),
+            spacing=dp(6),
+            size_hint_y=None,
+            height=dp(120),
             md_bg_color=[0.12, 0.42, 0.65, 1],
-            elevation=0
+            radius=[0, 0, 20, 20],
         )
-        main_layout.add_widget(toolbar)
-        
+
+        top_row = MDBoxLayout(
+            orientation="horizontal",
+            size_hint_y=None,
+            height=dp(44),
+            spacing=dp(10),
+        )
+
+        back_btn = MDFlatButton(
+            text="BACK",
+            on_release=lambda x: app.go_to_screen("dashboard"),
+        )
+        top_row.add_widget(back_btn)
+
+        top_row.add_widget(MDLabel(text="", size_hint_x=1))
+        header.add_widget(top_row)
+
+        header.add_widget(MDLabel(text="Backup & Restore", font_style="H5"))
+        header.add_widget(
+            MDLabel(
+                text="Save or restore one profile using a JSON file.",
+                font_style="Caption",
+                theme_text_color="Secondary",
+            )
+        )
+
+        root.add_widget(header)
+
+        # Scrollable content (prevents awkward empty space and keeps layout consistent)
         scroll = MDScrollView()
         content = MDBoxLayout(
-            orientation='vertical',
-            spacing=dp(20),
+            orientation="vertical",
             padding=dp(20),
-            size_hint_y=None
-        )
-        content.bind(minimum_height=content.setter('height'))
-        
-        # Backup card
-        backup_card = MDCard(
-            orientation='vertical',
-            padding=dp(25),
-            spacing=dp(15),
+            spacing=dp(14),
             size_hint_y=None,
-            md_bg_color=[0.1, 0.1, 0.1, 1],
-            radius=[15, 15, 15, 15]
         )
-        
-        backup_title = MDLabel(
-            text="Create Backup",
-            font_style="H6",
-            size_hint_y=None,
-            height=dp(35)
-        )
-        backup_card.add_widget(backup_title)
-        
-        backup_desc = MDLabel(
-            text="Save all your data to a backup file",
-            theme_text_color='Secondary',
-            font_style="Body2",
-            size_hint_y=None,
-            height=dp(25)
-        )
-        backup_card.add_widget(backup_desc)
-        
-        included_card = MDCard(
-            orientation='vertical',
-            padding=dp(15),
-            spacing=dp(8),
-            size_hint_y=None,
-            md_bg_color=[0.15, 0.15, 0.15, 1],
-            radius=[10, 10, 10, 10]
-        )
-        
-        included_items = [
-            "All medication records",
-            "All reminders",
-            "Emergency contacts",
-            "Medicine library",
-            "All user profiles"
-        ]
-        
-        for item in included_items:
-            item_label = MDLabel(
-                text=item,
-                font_style="Caption",
-                size_hint_y=None,
-                height=dp(25)
-            )
-            included_card.add_widget(item_label)
-        
-        included_card.height = dp(160)
-        backup_card.add_widget(included_card)
-        
-        backup_btn = MDRaisedButton(
-            text="CREATE BACKUP NOW",
-            size_hint=(1, None),
-            height=dp(56),
-            md_bg_color=[0.12, 0.42, 0.65, 1],
-            on_release=lambda x: self.create_backup()
-        )
-        backup_card.add_widget(backup_btn)
-        
-        backup_card.height = dp(400)
-        content.add_widget(backup_card)
-        
-        # Restore card
-        restore_card = MDCard(
-            orientation='vertical',
-            padding=dp(25),
-            spacing=dp(15),
-            size_hint_y=None,
-            md_bg_color=[0.1, 0.1, 0.1, 1],
-            radius=[15, 15, 15, 15]
-        )
-        
-        restore_title = MDLabel(
-            text="Restore Backup",
-            font_style="H6",
-            size_hint_y=None,
-            height=dp(35)
-        )
-        restore_card.add_widget(restore_title)
-        
-        restore_desc = MDLabel(
-            text="Restore data from a backup file",
-            theme_text_color='Secondary',
-            font_style="Body2",
-            size_hint_y=None,
-            height=dp(25)
-        )
-        restore_card.add_widget(restore_desc)
-        
-        warning_card = MDCard(
-            orientation='vertical',
-            padding=dp(15),
-            spacing=dp(8),
-            size_hint_y=None,
-            height=dp(90),
-            md_bg_color=[0.94, 0.68, 0.31, 1],
-            radius=[10, 10, 10, 10]
-        )
-        
-        warning_label = MDLabel(
-            text="Warning",
-            font_style="Subtitle1",
-            bold=True,
-            halign='center',
-            size_hint_y=None,
-            height=dp(25)
-        )
-        warning_card.add_widget(warning_label)
-        
-        warning_text = MDLabel(
-            text="This will replace ALL current data with data from the backup file",
-            halign='center',
-            font_style="Caption",
-            size_hint_y=None,
-            height=dp(50)
-        )
-        warning_card.add_widget(warning_text)
-        
-        restore_card.add_widget(warning_card)
-        
-        restore_btn = MDRaisedButton(
-            text="SELECT & RESTORE BACKUP",
-            size_hint=(1, None),
-            height=dp(56),
-            md_bg_color=[0.85, 0.33, 0.31, 1],
-            on_release=lambda x: self.restore_backup()
-        )
-        restore_card.add_widget(restore_btn)
-        
-        restore_card.height = dp(300)
-        content.add_widget(restore_card)
-        
-        # Info card
-        info_card = MDCard(
-            orientation='vertical',
-            padding=dp(20),
-            spacing=dp(10),
-            size_hint_y=None,
-            md_bg_color=[0.1, 0.1, 0.1, 1],
-            radius=[15, 15, 15, 15]
-        )
-        
-        info_title = MDLabel(
-            text="Backup Information",
-            font_style="Subtitle1",
-            bold=True,
-            size_hint_y=None,
-            height=dp(30)
-        )
-        info_card.add_widget(info_title)
-        
-        info_items = [
-            "Backups are saved with timestamps",
-            "Keep backups safe and secure",
-            "Transfer backups to other devices",
-            "Regular backups recommended"
-        ]
-        
-        for item in info_items:
-            item_label = MDLabel(
-                text=item,
-                theme_text_color='Secondary',
-                font_style="Caption",
-                size_hint_y=None,
-                height=dp(25)
-            )
-            info_card.add_widget(item_label)
-        
-        info_card.height = dp(170)
-        content.add_widget(info_card)
-        
+        content.bind(minimum_height=content.setter("height"))
         scroll.add_widget(content)
-        main_layout.add_widget(scroll)
-        
-        self.add_widget(main_layout)
-    
-    def create_backup(self):
-        app = App.get_running_app()
-        
-        try:
-            if ANDROID:
-                backup_dir = Path(primary_external_storage_path()) / "AlarMed" / "backups"
-            else:
-                backup_dir = Path("backups")
-            
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            backup_file = backup_dir / f"alarmed_backup_{timestamp}.db"
-            
-            app.db.conn.close()
-            shutil.copy2('alarmed.db', backup_file)
-            
-            app.db.conn = sqlite3.connect('alarmed.db', check_same_thread=False)
-            app.db.cursor = app.db.conn.cursor()
-            
-            dialog = MDDialog(
-                title="Success",
-                text=f"Backup created!\n\nFile: {backup_file.name}\nLocation: {backup_dir}",
-                buttons=[
-                    MDRaisedButton(text="OK", on_release=lambda x: dialog.dismiss())
-                ]
-            )
-            dialog.open()
-            
-        except Exception as e:
-            try:
-                app.db.conn = sqlite3.connect('alarmed.db', check_same_thread=False)
-                app.db.cursor = app.db.conn.cursor()
-            except:
-                pass
-            
-            dialog = MDDialog(
-                title="Error",
-                text=f"Failed to create backup:\n{str(e)}",
-                buttons=[MDFlatButton(text="OK", on_release=lambda x: dialog.dismiss())]
-            )
-            dialog.open()
-    
-    def restore_backup(self):
-        dialog = MDDialog(
-            title="Restore Backup",
-            text="This feature requires manual file selection.\n\nPlace your backup file in the app directory and restart the app.",
-            buttons=[MDFlatButton(text="OK", on_release=lambda x: dialog.dismiss())]
+        root.add_widget(scroll)
+
+        # Center column to keep buttons nicely aligned on wide screens
+        center = MDBoxLayout(
+            orientation="vertical",
+            spacing=dp(12),
+            size_hint_x=None,
+            width=dp(340),
+            pos_hint={"center_x": 0.5},
+            size_hint_y=None,
         )
-        dialog.open()
+        center.bind(minimum_height=center.setter("height"))
+        content.add_widget(center)
+
+        center.add_widget(
+            MDRaisedButton(
+                text="BACKUP CURRENT PROFILE",
+                size_hint_y=None,
+                height=dp(48),
+                pos_hint={"center_x": 0.5},
+                on_release=lambda x: self.backup_profile(),
+            )
+        )
+
+        center.add_widget(
+            MDRaisedButton(
+                text="RESTORE FROM BACKUP FILE",
+                size_hint_y=None,
+                height=dp(48),
+                pos_hint={"center_x": 0.5},
+                on_release=lambda x: self.open_restore_dialog(),
+            )
+        )
+
+        # Status / last action info
+        self.status_label = MDLabel(
+            text="",
+            theme_text_color="Secondary",
+            halign="left",
+            size_hint_y=None,
+        )
+        self.status_label.bind(texture_size=self.status_label.setter("size"))
+        center.add_widget(self.status_label)
+
+        self.add_widget(root)
+
+    def on_enter(self, *args):
+        # Ensure UI exists (safe if screen recreated)
+        if not self.children:
+            self.build_ui()
+
+    def _set_status(self, text):
+        if self.status_label:
+            self.status_label.text = text
+
+    def _get_backup_dir(self):
+        app = App.get_running_app()
+        base_dir = getattr(app, "user_data_dir", os.path.expanduser("~"))
+        backup_dir = os.path.join(base_dir, "AlarMedBackups")
+        os.makedirs(backup_dir, exist_ok=True)
+        return backup_dir
+
+    def backup_profile(self):
+        app = App.get_running_app()
+        if not app.current_profile_id:
+            app.show_dialog("Backup Failed", "No active profile selected.")
+            return
+
+        safe_name = (app.current_profile_name or "profile").strip().replace(" ", "_")
+        filename = f"alarmed_backup_{safe_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        backup_dir = self._get_backup_dir()
+        full_path = os.path.join(backup_dir, filename)
+
+        try:
+            app.db.backup_profile(app.current_profile_id, full_path)
+            app.show_dialog("Backup Successful", f"Saved to:\n{full_path}")
+            self._set_status(f"Last backup:\n{full_path}")
+        except Exception as e:
+            app.show_dialog("Backup Failed", str(e))
+
+    def open_restore_dialog(self):
+        start_dir = self._get_backup_dir()
+
+        chooser = FileChooserListView(
+            path=start_dir,
+            filters=["*.json"],
+        )
+
+        layout = MDBoxLayout(orientation="vertical", padding=dp(10), spacing=dp(10))
+        layout.add_widget(chooser)
+
+        buttons = MDBoxLayout(size_hint_y=None, height=dp(50), spacing=dp(10))
+        buttons.add_widget(
+            MDRaisedButton(text="CANCEL", on_release=lambda x: self._dismiss_popup())
+        )
+        layout.add_widget(buttons)
+
+        self._popup = Popup(
+            title="Select Backup File (double click to select)",
+            content=layout,
+            size_hint=(0.95, 0.9),
+        )
+
+        def on_submit(instance, selection, touch=None):
+            if selection:
+                self._restore_from_path(selection[0])
+
+        chooser.bind(on_submit=on_submit)
+        self._popup.open()
+
+    def _dismiss_popup(self):
+        if self._popup:
+            self._popup.dismiss()
+            self._popup = None
+
+    def _restore_from_path(self, path):
+        app = App.get_running_app()
+        try:
+            app.db.restore_profile(path)
+            self._dismiss_popup()
+            app.show_dialog("Restore Successful", "Profile restored. Select it from Profiles.")
+            app.go_to_screen("profile_selector")
+        except Exception as e:
+            self._dismiss_popup()
+            app.show_dialog("Restore Failed", str(e))

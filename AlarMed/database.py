@@ -4,6 +4,8 @@ All database operations
 """
 
 import sqlite3
+import json
+import os
 from datetime import datetime
 
 
@@ -315,3 +317,87 @@ class Database:
     
     def close(self):
         self.conn.close()
+
+
+
+
+# ===============================
+    # Backup & Restore (Profile-based)
+    # ===============================
+
+    def backup_profile(self, profile_id, backup_path):
+        """Export a single profile and all its data to JSON"""
+        data = {}
+
+        # Profile
+        self.cursor.execute(
+            "SELECT * FROM user_profiles WHERE id = ?", (profile_id,)
+        )
+        profile = self.cursor.fetchone()
+        if not profile:
+            raise ValueError("Profile not found")
+
+        columns = [d[0] for d in self.cursor.description]
+        data["profile"] = dict(zip(columns, profile))
+
+        # Related tables
+        tables = {
+            "medicine_records": "SELECT * FROM medicine_records WHERE profile_id = ?",
+            "reminders": "SELECT * FROM reminders WHERE profile_id = ?",
+            "medicine_library": "SELECT * FROM medicine_library WHERE profile_id = ?",
+        }
+
+        for key, query in tables.items():
+            self.cursor.execute(query, (profile_id,))
+            rows = self.cursor.fetchall()
+            cols = [d[0] for d in self.cursor.description]
+            data[key] = [dict(zip(cols, r)) for r in rows]
+
+        # Save JSON
+        os.makedirs(os.path.dirname(backup_path), exist_ok=True)
+        with open(backup_path, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+
+        return backup_path
+
+    def restore_profile(self, backup_path):
+        """Restore profile from JSON backup"""
+        with open(backup_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        profile = data["profile"]
+
+        # Create new profile
+        self.cursor.execute("""
+            INSERT INTO user_profiles
+            (profile_name, age, gender, profile_color, avatar_emoji)
+            VALUES (?, ?, ?, ?, ?)
+        """, (
+            profile["profile_name"] + " (Restored)",
+            profile["age"],
+            profile["gender"],
+            profile["profile_color"],
+            profile["avatar_emoji"]
+        ))
+        new_profile_id = self.cursor.lastrowid
+
+        # Restore related tables
+        def restore(table, rows):
+            if not rows:
+                return
+            cols = [k for k in rows[0].keys() if k not in ("id", "profile_id")]
+            placeholders = ",".join(["?"] * (len(cols) + 1))
+            sql = f"""
+                INSERT INTO {table} (profile_id, {",".join(cols)})
+                VALUES ({placeholders})
+            """
+            for r in rows:
+                values = [new_profile_id] + [r[c] for c in cols]
+                self.cursor.execute(sql, values)
+
+        restore("medicine_records", data["medicine_records"])
+        restore("reminders", data["reminders"])
+        restore("medicine_library", data["medicine_library"])
+
+        self.conn.commit()
+        return new_profile_id
